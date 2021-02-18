@@ -60,27 +60,28 @@ class MultiThreadedPageRankComputer : public PageRankComputer {
         }
     }
 
-    double runIterationCalc(double initial_value, Network const &network, page_hashmap_t &pageHashMap,
-                            page_hashmap_t &previousPageHashMap, double alpha,
+    double runIterationCalc(std::vector<PageIdAndRank> &result, double initial_value, Network const &network,
+                            page_hashmap_t &pageHashMap, page_hashmap_t &previousPageHashMap, double alpha,
                             std::unordered_map<PageId, std::vector<PageId>, PageIdHash> &edges,
                             std::unordered_map<PageId, uint32_t, PageIdHash> &numLinks) const {
         std::vector<std::thread> threads;
-        std::vector<PageId> pageIds;
-        for (const auto &iter : pageHashMap) {
-            pageIds.push_back(iter.first);
-        }
 
         double difference = 0;
         std::mutex diff_mutex;
 
         for (unsigned threadNum = 0; threadNum < this->numThreads; threadNum++) {
+            auto it = advanceWrapper(pageHashMap.begin(), pageHashMap.end(), threadNum);
 
             threads.emplace_back(
-                [&](unsigned initial) {
+                [&](unsigned initial, typename page_hashmap_t::iterator iter) {
                     double diff = 0;
 
                     for (unsigned i = initial; i < network.getSize(); i += this->numThreads) {
-                        auto pageId = pageIds[i];
+                        auto pageId = iter->first;
+                        if (iter == pageHashMap.end()) {
+                            break;
+                        }
+
                         double v = initial_value;
 
                         if (edges.count(pageId) > 0) {
@@ -91,12 +92,14 @@ class MultiThreadedPageRankComputer : public PageRankComputer {
 
                         pageHashMap[pageId] = v;
                         diff += std::abs(previousPageHashMap[pageId] - v);
+                        result[i] = PageIdAndRank(pageId, v);
+                        iter = advanceWrapper(iter, pageHashMap.end(), this->numThreads);
                     }
 
                     std::unique_lock<std::mutex> lock(diff_mutex);
                     difference += diff;
                 },
-                threadNum);
+                threadNum, it);
         }
 
         for (auto &thread : threads) {
@@ -136,12 +139,6 @@ class MultiThreadedPageRankComputer : public PageRankComputer {
         }
 
         return total_sum;
-    }
-
-    void addToVec(std::vector<PageIdAndRank> &result, page_hashmap_t &pageHashMap) const {
-        for (const auto &iter : pageHashMap) {
-            result.push_back(PageIdAndRank(iter.first, iter.second));
-        }
     }
 
   public:
@@ -201,11 +198,10 @@ class MultiThreadedPageRankComputer : public PageRankComputer {
         double danglingWeight = 1.0 / network.getSize();
         double initial_value = dangleSum * danglingWeight + (1.0 - alpha) / network.getSize();
 
-        double difference = runIterationCalc(initial_value, network, pageHashMap, previousPageHashMap, alpha,
-                                             edges, numLinks);
-
         std::vector<PageIdAndRank> result;
-        addToVec(result, pageHashMap);
+        result.resize(pageHashMap.size(), PageIdAndRank(PageId(""), 0));
+        double difference = runIterationCalc(result, initial_value, network, pageHashMap, previousPageHashMap,
+                                             alpha, edges, numLinks);
 
         return IterationResult(std::move(result), difference);
     }
