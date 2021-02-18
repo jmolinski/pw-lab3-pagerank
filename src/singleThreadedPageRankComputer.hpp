@@ -56,8 +56,10 @@ class SingleThreadedPageRankComputer : public PageRankComputer {
                 PageId pageId = pageMapElem.first;
                 pageMapElem.second = initial_value;
 
-                for (auto link : edges[pageId]) {
-                    pageMapElem.second += alpha * previousPageHashMap[link] / numLinks[link];
+                if(edges.count(pageId) > 0) {
+                    for (auto link : edges[pageId]) {
+                        pageMapElem.second += alpha * previousPageHashMap[link] / numLinks[link];
+                    }
                 }
                 difference += std::abs(previousPageHashMap[pageId] - pageMapElem.second);
             }
