@@ -1,14 +1,7 @@
 #ifndef SRC_MULTITHREADEDPAGERANKCOMPUTER_HPP_
 #define SRC_MULTITHREADEDPAGERANKCOMPUTER_HPP_
 
-#include <atomic>
-#include <condition_variable>
-#include <functional>
-#include <future>
-#include <memory>
 #include <mutex>
-#include <queue>
-#include <stdexcept>
 #include <thread>
 
 #include <unordered_map>
@@ -173,8 +166,16 @@ class MultiThreadedPageRankComputer : public PageRankComputer {
             }
         }
 
+        page_hashmap_t previousPageHashMap = pageHashMap;
         for (uint32_t i = 0; i < iterations; ++i) {
-            IterationResult res = iteration(pageHashMap, danglingNodes, network, alpha, edges, numLinks);
+            IterationResult res(std::vector<PageIdAndRank>(), 0);
+            if (i % 2 == 0) {
+                res = iteration(previousPageHashMap, pageHashMap, danglingNodes, network, alpha, edges,
+                                numLinks);
+            } else {
+                res = iteration(pageHashMap, previousPageHashMap, danglingNodes, network, alpha, edges,
+                                numLinks);
+            }
 
             ASSERT(res.result.size() == network.getSize(),
                    "Invalid result size=" << res.result.size() << ", for network" << network);
@@ -187,12 +188,10 @@ class MultiThreadedPageRankComputer : public PageRankComputer {
         ASSERT(false, "Not able to find result in iterations=" << iterations);
     }
 
-    IterationResult iteration(page_hashmap_t &pageHashMap, page_set_t const &danglingNodes,
-                              Network const &network, double alpha,
+    IterationResult iteration(page_hashmap_t &previousPageHashMap, page_hashmap_t &pageHashMap,
+                              page_set_t const &danglingNodes, Network const &network, double alpha,
                               std::unordered_map<PageId, std::vector<PageId>, PageIdHash> &edges,
                               std::unordered_map<PageId, uint32_t, PageIdHash> &numLinks) const {
-        page_hashmap_t previousPageHashMap = pageHashMap;
-
         double dangleSum = calculateDanglingSum(danglingNodes, previousPageHashMap);
         dangleSum = dangleSum * alpha;
         double danglingWeight = 1.0 / network.getSize();
