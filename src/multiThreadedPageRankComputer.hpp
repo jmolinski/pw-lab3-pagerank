@@ -23,6 +23,16 @@ class MultiThreadedPageRankComputer : public PageRankComputer {
     using page_hashmap_t = std::unordered_map<PageId, PageRank, PageIdHash>;
     using page_set_t = std::unordered_set<PageId, PageIdHash>;
 
+    template <typename T>
+    T advanceWrapper(T it, T end, unsigned n) const {
+        for (unsigned i = 0; i < n; i++) {
+            if (it != end) {
+                it = std::next(it, 1);
+            }
+        }
+        return it;
+    }
+
     struct IterationResult {
         std::vector<PageIdAndRank> result;
         double difference;
@@ -30,9 +40,6 @@ class MultiThreadedPageRankComputer : public PageRankComputer {
         IterationResult(std::vector<PageIdAndRank> &&res, double diff) : result(res), difference(diff) {
         }
     };
-
-  public:
-    MultiThreadedPageRankComputer(uint32_t numThreadsArg) : numThreads(numThreadsArg){};
 
     void generateIdsForPages(Network const &network) const {
         const auto &generator = network.getGenerator();
@@ -67,9 +74,11 @@ class MultiThreadedPageRankComputer : public PageRankComputer {
         std::mutex diff_mutex;
 
         for (unsigned threadNum = 0; threadNum < this->numThreads; threadNum++) {
+
             threads.emplace_back(
                 [&](unsigned initial) {
                     double diff = 0;
+
                     for (unsigned i = initial; i < network.getSize(); i += this->numThreads) {
                         auto pageId = pageIds[i];
                         double v = initial_value;
@@ -96,6 +105,47 @@ class MultiThreadedPageRankComputer : public PageRankComputer {
 
         return difference;
     }
+
+    double calculateDanglingSum(page_set_t const &danglingNodes, page_hashmap_t &previousPageHashMap) const {
+        std::vector<std::thread> threads;
+
+        double total_sum = 0;
+        std::mutex diff_mutex;
+
+        for (unsigned threadNum = 0; threadNum < this->numThreads; threadNum++) {
+            auto it = advanceWrapper(danglingNodes.begin(), danglingNodes.end(), threadNum);
+            threads.emplace_back(
+                [&](typename page_set_t::const_iterator iter) {
+                    double sum = 0;
+                    do {
+                        if (iter == danglingNodes.end()) {
+                            break;
+                        }
+                        sum += previousPageHashMap[*iter];
+                        iter = advanceWrapper(iter, danglingNodes.end(), this->numThreads);
+                    } while (iter != danglingNodes.end());
+
+                    std::unique_lock<std::mutex> lock(diff_mutex);
+                    total_sum += sum;
+                },
+                it);
+        }
+
+        for (auto &thread : threads) {
+            thread.join();
+        }
+
+        return total_sum;
+    }
+
+    void addToVec(std::vector<PageIdAndRank> &result, page_hashmap_t &pageHashMap) const {
+        for (const auto &iter : pageHashMap) {
+            result.push_back(PageIdAndRank(iter.first, iter.second));
+        }
+    }
+
+  public:
+    MultiThreadedPageRankComputer(uint32_t numThreadsArg) : numThreads(numThreadsArg){};
 
     std::vector<PageIdAndRank> computeForNetwork(Network const &network, double alpha, uint32_t iterations,
                                                  double tolerance) const {
@@ -146,10 +196,7 @@ class MultiThreadedPageRankComputer : public PageRankComputer {
                               std::unordered_map<PageId, uint32_t, PageIdHash> &numLinks) const {
         page_hashmap_t previousPageHashMap = pageHashMap;
 
-        double dangleSum = 0;
-        for (auto danglingNode : danglingNodes) {
-            dangleSum += previousPageHashMap[danglingNode];
-        }
+        double dangleSum = calculateDanglingSum(danglingNodes, previousPageHashMap);
         dangleSum = dangleSum * alpha;
         double danglingWeight = 1.0 / network.getSize();
         double initial_value = dangleSum * danglingWeight + (1.0 - alpha) / network.getSize();
@@ -158,9 +205,7 @@ class MultiThreadedPageRankComputer : public PageRankComputer {
                                              edges, numLinks);
 
         std::vector<PageIdAndRank> result;
-        for (const auto &iter : pageHashMap) {
-            result.push_back(PageIdAndRank(iter.first, iter.second));
-        }
+        addToVec(result, pageHashMap);
 
         return IterationResult(std::move(result), difference);
     }
