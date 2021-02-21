@@ -65,6 +65,7 @@ class MultiThreadedPageRankComputer : public PageRankComputer {
         for (unsigned threadNum = 0; threadNum < this->numThreads; threadNum++) {
             auto it = advanceWrapper(pageHashMap.begin(), pageHashMap.end(), threadNum);
 
+            auto edges_end = edges.end();
             threads.emplace_back(
                 [&](unsigned initial, typename page_hashmap_t::iterator iter) {
                     double diff = 0;
@@ -77,8 +78,9 @@ class MultiThreadedPageRankComputer : public PageRankComputer {
 
                         double v = initial_value;
 
-                        if (edges.count(pageId) > 0) {
-                            for (auto link : edges[pageId]) {
+                        auto edges_page = edges.find(pageId);
+                        if (edges_page != edges_end) {
+                            for (const auto& link : edges_page->second) {
                                 v += alpha * previousPageHashMap[link] / numLinks[link];
                             }
                         }
